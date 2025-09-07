@@ -7,7 +7,12 @@ const HeroSection = () => {
   const navigate = useNavigate();
 
   const handleStartDetection = () => {
-    navigate("/detection");
+    const isAuthenticated = !!localStorage.getItem("token");
+    if (isAuthenticated) {
+      navigate("/detection");
+    } else {
+      navigate("/login");
+    }
   };
 
   return (

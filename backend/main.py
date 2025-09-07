@@ -1,12 +1,18 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordRequestForm
 import uvicorn
 import os
 import io
 from PIL import Image
 import base64
 from model_manager import GarbageDetectionModel
+from database import get_db, User, SessionLocal
+from models import UserCreate, UserLogin, Token
+from auth import authenticate_user, create_access_token, get_password_hash, get_current_user
+from datetime import timedelta
+from sqlalchemy.orm import Session
 import json
 
 app = FastAPI(title="Hazard Spotter AI API", version="1.0.0")
@@ -130,6 +136,48 @@ async def get_model_info():
         "model_name": "YOLOv8 Garbage Detection",
         "classes": model_manager.get_class_names(),
         "health_hazard_mapping": model_manager.get_health_hazard_mapping()
+    }
+
+@app.post("/auth/register")
+async def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if db_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+    
+    db_user = User(
+        email=user.email,
+        name=user.name,
+        hashed_password=get_password_hash(user.password)
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return {"message": "User created successfully"}
+
+@app.post("/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=30)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/auth/me")
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return {
+        "email": current_user.email,
+        "name": current_user.name
     }
 
 if __name__ == "__main__":
