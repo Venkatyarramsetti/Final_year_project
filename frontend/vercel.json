@@ -1,19 +1,28 @@
 {
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
-<<<<<<< HEAD
-  ],
+  "rewrites": [{ 
+    "source": "/(.*)", 
+    "destination": "/index.html" 
+  }],
   "routes": [
+    { 
+      "handle": "filesystem"
+    },
     {
-      "src": "/[^.]+",
-      "dest": "/",
-      "status": 200
+      "src": "/assets/(.*)",
+      "headers": { "cache-control": "public, max-age=31536000, immutable" },
+      "continue": true
+    },
+    {
+      "src": "/(.*\\.(js|css|png|jpg|jpeg|gif|ico|json))",
+      "headers": { "cache-control": "public,max-age=31536000,immutable" },
+      "continue": true
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ],
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite"
-=======
-  ]
->>>>>>> 1db5636d48c2fcc6db7020af098713e4988bdcd3
 }
