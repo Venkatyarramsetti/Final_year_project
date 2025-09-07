@@ -1,28 +1,58 @@
-from sqlalchemy import create_engine, Column, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from os import getenv
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
+from bson import ObjectId
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
+# Load environment variables
+load_dotenv()
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+MONGODB_URI = getenv("MONGODB_URI")
 
-Base = declarative_base()
+# MongoDB client
+client = AsyncIOMotorClient(MONGODB_URI)
+db = client.hazard_spotter
 
-class User(Base):
-    __tablename__ = "users"
+# Collections
+users = db.users
 
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True)
-    name = Column(String)
-    hashed_password = Column(String)
+class User:
+    def __init__(self, email: str, name: str, hashed_password: str):
+        self.email = email
+        self.name = name
+        self.hashed_password = hashed_password
 
-# Create all tables
-Base.metadata.create_all(bind=engine)
+    @classmethod
+    async def get_by_email(cls, email: str):
+        user_data = await users.find_one({"email": email})
+        if user_data:
+            return cls(**user_data)
+        return None
 
-def get_db():
-    db = SessionLocal()
+    async def save(self):
+        user_data = {
+            "email": self.email,
+            "name": self.name,
+            "hashed_password": self.hashed_password
+        }
+        await users.insert_one(user_data)
+        return self
+
+    async def update(self):
+        await users.update_one(
+            {"email": self.email},
+            {"$set": {
+                "name": self.name,
+                "hashed_password": self.hashed_password
+            }}
+        )
+        return self
+
+async def init_db():
     try:
-        yield db
-    finally:
-        db.close()
+        await client.server_info()
+        # Create unique index on email
+        await users.create_index("email", unique=True)
+    except Exception as e:
+        print(f"Error connecting to MongoDB: {e}")
+        raise
