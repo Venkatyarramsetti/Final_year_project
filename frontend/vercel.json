@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
+<<<<<<< HEAD
   ],
   "routes": [
     {
@@ -12,4 +13,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite"
+=======
+  ]
+>>>>>>> 1db5636d48c2fcc6db7020af098713e4988bdcd3
 }
