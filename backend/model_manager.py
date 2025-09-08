@@ -1,8 +1,14 @@
 import os
 import kagglehub
+import base64
+import cv2
+from io import BytesIO
 from ultralytics import YOLO
 from PIL import Image as PILImage
 import numpy as np
+import cv2
+import base64
+from io import BytesIO
 
 class GarbageDetectionModel:
     def __init__(self):
@@ -84,56 +90,100 @@ class GarbageDetectionModel:
     
     def _setup_default_mappings(self):
         """Setup default mappings for fallback model"""
-        self.garbage_classes_map = self.model.names
+        if self.model is None:
+            raise ValueError("Model is not initialized")
+            
+        # Store names from model
+        self.class_names = self.model.names if hasattr(self.model, 'names') else {}
         
-        # For default YOLO model, assume all detected objects are potentially hazardous
-        self.class_index_to_health_hazard = {
-            index: 'Hazardous' for index in self.garbage_classes_map.keys()
-        }
+        # Define safe food items from COCO dataset
+        self.safe_items = [
+            'banana', 'apple', 'sandwich', 'orange', 'carrot', 'broccoli', 
+            'hot dog', 'pizza', 'donut', 'cake', 'bowl', 'cucumber', 
+            'tomato', 'lettuce', 'celery', 'potato', 'onion', 'bell pepper',
+            'fruits', 'vegetables'
+        ]
     
     def detect_and_categorize(self, image_path):
-        """Run detection on an image and return categorized results"""
+        """Run detection on an image and return categorized results with annotated image"""
+        if self.model is None:
+            raise ValueError("Model is not initialized")
+            
         print(f"Running inference on {image_path}...")
+        # Read image with OpenCV for drawing
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError("Could not read image")
+            
         results = self.model(image_path)
         
         detections = []
+        food_items_count = 0
+        total_items = 0
         
-        for r in results:
-            boxes = r.boxes.xyxy.cpu().numpy() if r.boxes is not None else []
-            scores = r.boxes.conf.cpu().numpy() if r.boxes is not None else []
-            class_indices = r.boxes.cls.cpu().numpy().astype(int) if r.boxes is not None else []
-            
-            for i in range(len(boxes)):
-                box = boxes[i]
-                score = scores[i]
-                class_index = class_indices[i]
-                class_name = self.model.names[class_index]
-                health_hazard_category = self.class_index_to_health_hazard.get(class_index, 'Unknown')
+        # Process all detections first to count food items
+        for result in results:
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                cls_name = self.class_names[cls_id].lower()
                 
-                detection = {
-                    "class_name": class_name,
-                    "confidence": float(score),
-                    "category": health_hazard_category,
-                    "bounding_box": {
-                        "x1": float(box[0]),
-                        "y1": float(box[1]),
-                        "x2": float(box[2]),
-                        "y2": float(box[3])
-                    }
-                }
-                detections.append(detection)
+                if cls_name in self.safe_items:
+                    food_items_count += 1
+                total_items += 1
         
+        # Determine if image mostly contains food
+        is_mostly_food = (food_items_count / max(total_items, 1)) > 0.5
+        
+        # Process detections for output and draw on image
+        for result in results:
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                class_name = self.class_names[cls_id]
+                coords = box.xyxy[0].tolist()
+                
+                # Convert coordinates to integers for drawing
+                x1, y1, x2, y2 = map(int, coords)
+                
+                # Mark as safe if it's a food item or if the image mostly contains food
+                is_food_item = class_name.lower() in self.safe_items
+                hazard_status = 'Safe' if (is_food_item or is_mostly_food) else 'Hazardous'
+                
+                # Choose color based on hazard status (green for safe, red for hazardous)
+                color = (0, 255, 0) if hazard_status == 'Safe' else (0, 0, 255)
+                
+                # Draw bounding box
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+                
+                # Add label with class name and confidence
+                label = f"{class_name} ({conf:.2f})"
+                (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                cv2.rectangle(image, (x1, y1 - label_height - 10), (x1 + label_width, y1), color, -1)
+                cv2.putText(image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+                detections.append({
+                    'class': class_name,
+                    'confidence': float(conf),
+                    'coordinates': [float(c) for c in coords],
+                    'health_status': hazard_status
+                })
+                
         # Summary statistics
         total_detections = len(detections)
-        hazardous_count = sum(1 for d in detections if d["category"] == "Hazardous")
-        healthy_count = total_detections - hazardous_count
+        hazardous_count = sum(1 for d in detections if d["health_status"] == "Hazardous")
+        safe_count = total_detections - hazardous_count
+        
+        # Convert the annotated image to base64
+        _, buffer = cv2.imencode('.jpg', image)
+        img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         result = {
             "total_detections": total_detections,
             "hazardous_count": hazardous_count,
-            "healthy_count": healthy_count,
-            "overall_assessment": "Hazardous" if hazardous_count > 0 else "Healthy",
-            "detections": detections
+            "safe_count": safe_count,
+            "overall_assessment": "Safe" if hazardous_count == 0 else "Hazardous",
+            "detections": detections,
+            "annotated_image": img_base64
         }
         
         print("Inference and categorization complete.")
@@ -141,8 +191,9 @@ class GarbageDetectionModel:
     
     def get_class_names(self):
         """Get all class names"""
-        return self.garbage_classes_map
+        return self.class_names
     
     def get_health_hazard_mapping(self):
-        """Get the health/hazard mapping"""
-        return self.class_index_to_health_hazard
+        """Get the health/hazard mapping for each class"""
+        return {name: 'Safe' if name.lower() in self.safe_items else 'Hazardous' 
+                for name in self.class_names.values()}

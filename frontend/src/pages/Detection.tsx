@@ -6,23 +6,19 @@ import { Upload, Camera, Loader2, AlertTriangle, CheckCircle } from 'lucide-reac
 import Header from "@/components/Header";
 
 interface Detection {
-  class_name: string;
+  class: string;
   confidence: number;
-  category: string;
-  bounding_box: {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  };
+  health_status: string;
+  coordinates: number[];
 }
 
 interface DetectionResult {
   total_detections: number;
   hazardous_count: number;
-  healthy_count: number;
+  safe_count: number;
   overall_assessment: string;
   detections: Detection[];
+  annotated_image: string;
 }
 
 const Detection = () => {
@@ -144,7 +140,7 @@ const Detection = () => {
                   {imagePreview ? (
                     <div className="space-y-4">
                       <img
-                        src={imagePreview}
+                        src={results?.annotated_image ? `data:image/jpeg;base64,${results.annotated_image}` : imagePreview}
                         alt="Selected"
                         className="max-w-full h-48 object-contain mx-auto rounded"
                       />

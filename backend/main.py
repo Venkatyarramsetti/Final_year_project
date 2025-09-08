@@ -8,11 +8,10 @@ import io
 from PIL import Image
 import base64
 from model_manager import GarbageDetectionModel
-from database import get_db, User, SessionLocal
+from database import get_db, User, users
 from models import UserCreate, UserLogin, Token
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user
 from datetime import timedelta
-from sqlalchemy.orm import Session
 import json
 
 app = FastAPI(title="Hazard Spotter AI API", version="1.0.0")
@@ -139,8 +138,8 @@ async def get_model_info():
     }
 
 @app.post("/auth/register")
-async def register(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user.email).first()
+async def register(user: UserCreate):
+    db_user = await User.get_by_email(user.email)
     if db_user:
         raise HTTPException(
             status_code=400,
@@ -152,15 +151,19 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
         name=user.name,
         hashed_password=get_password_hash(user.password)
     )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    
+    user_data = {
+        "email": db_user.email,
+        "name": db_user.name,
+        "hashed_password": db_user.hashed_password
+    }
+    await users.insert_one(user_data)
     return {"message": "User created successfully"}
 
 @app.post("/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await User.get_by_email(form_data.username)
+    if not user or not await authenticate_user(user, form_data.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
