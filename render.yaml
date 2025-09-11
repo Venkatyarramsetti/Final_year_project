@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: hazard-spotter-backend
+    env: python
+    region: oregon # Choose the region closest to your users
+    buildCommand: pip install -r backend/requirements.txt && cd backend && bash download_model.sh
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 30
+      - key: MONGODB_URI
+        sync: false # This will be manually added through the Render dashboard for security

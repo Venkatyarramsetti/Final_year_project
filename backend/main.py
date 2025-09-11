@@ -13,13 +13,14 @@ from models import UserCreate, UserLogin, Token
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user
 from datetime import timedelta
 import json
+from temp_utils import get_temp_path
 
 app = FastAPI(title="Hazard Spotter AI API", version="1.0.0")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8080", "http://localhost:8081"],
+    allow_origins=["http://localhost:3000", "http://localhost:8080", "http://localhost:8081", "https://hazard-spotter-frontend.vercel.app", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,7 +59,7 @@ async def detect_hazards(file: UploadFile = File(...)):
         image = Image.open(io.BytesIO(contents))
         
         # Save the image temporarily
-        temp_image_path = f"temp_{file.filename}"
+        temp_image_path = get_temp_path(f"temp_{file.filename}")
         image.save(temp_image_path)
         
         try:
@@ -98,7 +99,7 @@ async def detect_hazards_base64(data: dict):
         image = Image.open(io.BytesIO(image_data))
         
         # Save the image temporarily
-        temp_image_path = "temp_base64_image.jpg"
+        temp_image_path = get_temp_path("temp_base64_image.jpg")
         image.save(temp_image_path)
         
         try:
