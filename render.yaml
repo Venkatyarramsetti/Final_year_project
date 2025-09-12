@@ -2,10 +2,12 @@ services:
   - type: web
     name: hazard-spotter-backend
     env: python
-    rootDir: backend  # Specify the backend directory as root
     region: oregon # Choose the region closest to your users
-    buildCommand: pip install -r requirements.txt && bash download_model.sh
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && cd backend && bash download_model.sh
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0  # Explicitly set Python version
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
