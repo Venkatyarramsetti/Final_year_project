@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Optional
+import logging
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -9,11 +10,19 @@ from database import User, get_db
 from os import getenv
 from dotenv import load_dotenv
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Load environment variables
 load_dotenv()
 
-# Security constants
-SECRET_KEY = getenv("SECRET_KEY")
+# Security constants - ensure SECRET_KEY is always a string
+SECRET_KEY = getenv("SECRET_KEY", "temporary_secret_key_for_development_only_do_not_use_in_production")
+if not SECRET_KEY:
+    logger.warning("SECRET_KEY is not set, using a temporary key for development. DO NOT USE IN PRODUCTION.")
+    SECRET_KEY = "temporary_secret_key_for_development_only_do_not_use_in_production"
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
@@ -40,10 +49,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     else:
         expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
-    if not SECRET_KEY:
-        raise ValueError("SECRET_KEY is not set")
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    try:
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        return encoded_jwt
+    except Exception as e:
+        logger.error(f"Error creating access token: {e}")
+        raise
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -52,16 +63,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        if not SECRET_KEY:
-            raise ValueError("SECRET_KEY is not set")
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
         if email is None:
             raise credentials_exception
-    except (JWTError, ValueError):
+    except JWTError as e:
+        logger.error(f"JWT token validation error: {e}")
+        raise credentials_exception
+    except Exception as e:
+        logger.error(f"Unexpected error in token validation: {e}")
         raise credentials_exception
     
     user = await User.get_by_email(email)
     if user is None:
+        logger.warning(f"User not found for email in token: {email}")
         raise credentials_exception
     return user

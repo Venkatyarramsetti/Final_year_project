@@ -3,7 +3,7 @@ services:
     name: hazard-spotter-backend
     env: python
     region: oregon # Choose the region closest to your users
-    buildCommand: pip install -r requirements.txt && cd backend && bash download_model.sh
+    buildCommand: pip install -r requirements.txt && cd backend && chmod +x download_model.sh && bash download_model.sh
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

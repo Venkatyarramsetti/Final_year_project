@@ -5,22 +5,36 @@ from fastapi.security import OAuth2PasswordRequestForm
 import uvicorn
 import os
 import io
+import logging
 from PIL import Image
 import base64
 from model_manager import GarbageDetectionModel
-from database import get_db, User, users
+from database import get_db, User, users, init_db
 from models import UserCreate, UserLogin, Token
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user
 from datetime import timedelta
 import json
 from temp_utils import get_temp_path
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Hazard Spotter AI API", version="1.0.0")
 
-# Configure CORS
+# Configure CORS - add Render URL when you know it
+allowed_origins = [
+    "http://localhost:3000", 
+    "http://localhost:8080", 
+    "http://localhost:8081", 
+    "https://hazard-spotter-frontend.vercel.app", 
+    # Add your Render frontend URL here when available
+    "*"  # For development, remove in production
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8080", "http://localhost:8081", "https://hazard-spotter-frontend.vercel.app", "*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,9 +46,20 @@ model_manager = None
 @app.on_event("startup")
 async def startup_event():
     global model_manager
-    print("Initializing Garbage Detection Model...")
-    model_manager = GarbageDetectionModel()
-    print("Model initialized successfully!")
+    try:
+        # Initialize database connection
+        logger.info("Initializing database connection...")
+        await init_db()
+        
+        # Initialize model
+        logger.info("Initializing Garbage Detection Model...")
+        model_manager = GarbageDetectionModel()
+        logger.info("Model initialized successfully!")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+        # Still allow the app to start even if there's an error
+        if model_manager is None:
+            logger.warning("Warning: Model initialization failed, some endpoints may not work")
 
 @app.get("/")
 async def root():
@@ -42,16 +67,25 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "model_loaded": model_manager is not None}
+    return {
+        "status": "healthy", 
+        "model_loaded": model_manager is not None,
+        "api_version": "1.0.0",
+        "environment": os.getenv("ENVIRONMENT", "development")
+    }
 
 @app.post("/detect")
 async def detect_hazards(file: UploadFile = File(...)):
     """
     Upload an image and get hazard detection results
     """
+    # Check if model is loaded
+    if model_manager is None:
+        raise HTTPException(status_code=503, detail="Model not initialized. Please try again later.")
+        
     try:
         # Validate file type
-        if not file.content_type.startswith('image/'):
+        if not file.content_type or not file.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="File must be an image")
         
         # Read and process the uploaded image
@@ -77,12 +111,14 @@ async def detect_hazards(file: UploadFile = File(...)):
             })
             
         except Exception as e:
+            logger.error(f"Error during detection: {str(e)}")
             # Clean up temporary file in case of error
             if os.path.exists(temp_image_path):
                 os.remove(temp_image_path)
             raise e
             
     except Exception as e:
+        logger.error(f"Error processing image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
 @app.post("/detect-base64")
@@ -90,6 +126,10 @@ async def detect_hazards_base64(data: dict):
     """
     Upload an image as base64 and get hazard detection results
     """
+    # Check if model is loaded
+    if model_manager is None:
+        raise HTTPException(status_code=503, detail="Model not initialized. Please try again later.")
+        
     try:
         if "image" not in data:
             raise HTTPException(status_code=400, detail="No image data provided")
@@ -116,12 +156,14 @@ async def detect_hazards_base64(data: dict):
             })
             
         except Exception as e:
+            logger.error(f"Error during base64 detection: {str(e)}")
             # Clean up temporary file in case of error
             if os.path.exists(temp_image_path):
                 os.remove(temp_image_path)
             raise e
             
     except Exception as e:
+        logger.error(f"Error processing base64 image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
 @app.get("/model-info")
