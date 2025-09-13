@@ -66,7 +66,8 @@ const Detection = () => {
       const formData = new FormData();
       formData.append('file', selectedImage);
 
-      const response = await fetch('http://localhost:8000/detect', {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const response = await fetch(`${backendUrl}/detect`, {
         method: 'POST',
         body: formData,
       });

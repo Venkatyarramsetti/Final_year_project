@@ -26,7 +26,8 @@ const Register = () => {
     }
 
     try {
-      const response = await fetch("http://localhost:8000/auth/register", {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const response = await fetch(`${backendUrl}/auth/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
