@@ -20,12 +20,14 @@ var/
 .installed.cfg
 *.egg
 
-# Virtual Environment
+# Virtual Environment (Unnecessary - shouldn't be committed)
 hazard_env/
 venv/
 ENV/
+env/
+.venv/
 
-# Environment Variables
+# Environment Variables (Contains secrets)
 .env
 .env.local
 .env.development.local
@@ -42,23 +44,77 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
+bun.lockb
 
 # Build
 /build
 /dist
+*.tsbuildinfo
 
-# IDE
+# IDE (Unnecessary editor configs)
 .idea/
 .vscode/
 *.swp
 *.swo
+*.sublime-*
+.project
+.settings/
 
 # OS
 .DS_Store
 Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 
-# YOLO weights
+# YOLO weights (Large model files)
 *.pt
 *.pth
 *.onnx
 *.engine
+*.torchscript
+*.weights
+
+# Training outputs (Large - shouldn't be in repo)
+backend/outputs/
+backend/data/
+backend/models/*.pt
+backend/models/*.pth
+!backend/models/.gitkeep
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+.cache/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Testing
+.pytest_cache/
+.tox/
+
+# Documentation builds
+docs/_build/
+site/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Package locks (Keep package.json but not lockfiles for clarity)
+package-lock.json
+yarn.lock

@@ -17,6 +17,10 @@ interface DetectionResult {
   hazardous_count: number;
   safe_count: number;
   overall_assessment: string;
+  average_confidence: number;
+  model_accuracy: number;
+  high_confidence_detections: number;
+  medium_confidence_detections?: number;
   detections: Detection[];
   annotated_image: string;
 }
@@ -236,9 +240,40 @@ const Detection = () => {
                       </div>
                       <div className="bg-green-50 p-3 rounded">
                         <div className="text-2xl font-bold text-green-600">
-                          {results.healthy_count}
+                          {results.safe_count}
                         </div>
                         <div className="text-sm text-green-600">Safe</div>
+                      </div>
+                    </div>
+
+                    {/* Accuracy Display */}
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border border-blue-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">Model Accuracy</span>
+                        <span className={`text-2xl font-bold ${
+                          (results.model_accuracy || 0) >= 70 ? 'text-green-600' :
+                          (results.model_accuracy || 0) >= 50 ? 'text-yellow-600' : 'text-blue-600'
+                        }`}>
+                          {results.model_accuracy?.toFixed(1) || '0.0'}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div 
+                          className={`h-2.5 rounded-full transition-all duration-500 ${
+                            (results.model_accuracy || 0) >= 70 ? 'bg-gradient-to-r from-green-500 to-emerald-600' :
+                            (results.model_accuracy || 0) >= 50 ? 'bg-gradient-to-r from-yellow-500 to-orange-500' :
+                            'bg-gradient-to-r from-blue-500 to-indigo-600'
+                          }`}
+                          style={{ width: `${results.model_accuracy || 0}%` }}
+                        ></div>
+                      </div>
+                      <div className="flex justify-between mt-2 text-xs text-gray-600">
+                        <span>Avg: {(results.average_confidence * 100).toFixed(1)}%</span>
+                        <span>High: {results.high_confidence_detections || 0} | Med: {results.medium_confidence_detections || 0}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-gray-500 italic">
+                        {(results.model_accuracy || 0) >= 70 ? '✓ Excellent accuracy' :
+                         (results.model_accuracy || 0) >= 50 ? '⚠ Good accuracy' : 'ℹ Acceptable accuracy'}
                       </div>
                     </div>
 
@@ -251,23 +286,34 @@ const Detection = () => {
                             <div
                               key={index}
                               className={`p-2 rounded border ${
-                                detection.category === 'Hazardous'
+                                detection.health_status === 'Hazardous'
                                   ? 'border-red-200 bg-red-50'
                                   : 'border-green-200 bg-green-50'
                               }`}
                             >
                               <div className="flex justify-between items-center">
-                                <span className="font-medium">{detection.class_name}</span>
+                                <span className="font-medium">{detection.class}</span>
                                 <span className={`text-xs px-2 py-1 rounded ${
-                                  detection.category === 'Hazardous'
+                                  detection.health_status === 'Hazardous'
                                     ? 'bg-red-200 text-red-800'
                                     : 'bg-green-200 text-green-800'
                                 }`}>
-                                  {detection.category}
+                                  {detection.health_status}
                                 </span>
                               </div>
-                              <div className="text-sm text-gray-600">
-                                Confidence: {(detection.confidence * 100).toFixed(1)}%
+                              <div className="mt-1 flex items-center gap-2">
+                                <div className="text-sm text-gray-600">
+                                  Confidence: {(detection.confidence * 100).toFixed(1)}%
+                                </div>
+                                <div className="flex-1 bg-gray-200 rounded-full h-1.5">
+                                  <div 
+                                    className={`h-1.5 rounded-full ${
+                                      detection.confidence >= 0.60 ? 'bg-green-500' : 
+                                      detection.confidence >= 0.45 ? 'bg-yellow-500' : 'bg-orange-500'
+                                    }`}
+                                    style={{ width: `${detection.confidence * 100}%` }}
+                                  ></div>
+                                </div>
                               </div>
                             </div>
                           ))}

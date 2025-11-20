@@ -1,40 +1,80 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 import uvicorn
 import os
 import io
 import logging
+import sys
+import traceback
+from typing import Annotated
 from PIL import Image
 import base64
 from model_manager import GarbageDetectionModel
 from database import get_db, User, users, init_db
 from models import UserCreate, UserLogin, Token
-from auth import authenticate_user, create_access_token, get_password_hash, get_current_user
+from auth import authenticate_user, create_access_token, get_password_hash, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES
 from datetime import timedelta
 import json
 from temp_utils import get_temp_path
 
+# Import enhanced features (waste categorization & IoT integration)
+try:
+    from api_extensions import router as extensions_router
+    EXTENSIONS_AVAILABLE = True
+    logger_ext = logging.getLogger("extensions")
+    logger_ext.info("✓ Advanced features loaded (waste categorization + IoT)")
+except ImportError as e:
+    EXTENSIONS_AVAILABLE = False
+    logger_ext = logging.getLogger("extensions")
+    logger_ext.warning(f"Advanced features not available: {e}")
+
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Hazard Spotter AI API", version="1.0.0")
+app = FastAPI(
+    title="Automated Garbage Classification System",
+    version="2.0.0",
+    description="Deep learning-based waste classification with IoT integration for smart waste management"
+)
 
-# Configure CORS - add Render URL when you know it
+# Include advanced feature endpoints if available
+if EXTENSIONS_AVAILABLE:
+    app.include_router(extensions_router)
+    logger.info("✓ Advanced API endpoints registered")
+
+# Add exception handler for debugging
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    error_detail = {
+        "message": str(exc),
+        "traceback": traceback.format_exc()
+    }
+    logging.error(f"Unhandled exception: {error_detail}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": str(exc)}
+    )
+
+# Configure CORS
 allowed_origins = [
     "http://localhost:3000", 
     "http://localhost:8080", 
     "http://localhost:8081", 
-    "https://hazard-spotter-frontend.vercel.app", 
-    # Add your Render frontend URL here when available
-    "*"  # For development, remove in production
+    "https://hazard-spotter-frontend.vercel.app",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,15 +91,12 @@ async def startup_event():
         logger.info("Initializing database connection...")
         await init_db()
         
-        # Initialize model
-        logger.info("Initializing Garbage Detection Model...")
-        model_manager = GarbageDetectionModel()
-        logger.info("Model initialized successfully!")
+        # Initialize model (lazy loading - will load when first detection request comes)
+        logger.info("Model will be loaded on first detection request...")
+        logger.info("Startup complete!")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
-        # Still allow the app to start even if there's an error
-        if model_manager is None:
-            logger.warning("Warning: Model initialization failed, some endpoints may not work")
+        logger.warning("Warning: Some features may not work properly")
 
 @app.get("/")
 async def root():
@@ -79,9 +116,16 @@ async def detect_hazards(file: UploadFile = File(...)):
     """
     Upload an image and get hazard detection results
     """
-    # Check if model is loaded
+    global model_manager
+    # Lazy load model on first request
     if model_manager is None:
-        raise HTTPException(status_code=503, detail="Model not initialized. Please try again later.")
+        try:
+            logger.info("Loading model for first detection request...")
+            model_manager = GarbageDetectionModel()
+            logger.info("Model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Error loading model: {e}")
+            raise HTTPException(status_code=503, detail="Model initialization failed. Please try again later.")
         
     try:
         # Validate file type
@@ -204,20 +248,42 @@ async def register(user: UserCreate):
     return {"message": "User created successfully"}
 
 @app.post("/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await User.get_by_email(form_data.username)
-    if not user or not await authenticate_user(user, form_data.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+async def login(request: Request):
+    try:
+        form_data = await request.form()
+        username = str(form_data.get("username", ""))
+        password = str(form_data.get("password", ""))
+        
+        logger.info(f"Login attempt for username: {username}")
+        
+        user = await User.get_by_email(username)
+        if not user:
+            logger.warning(f"User not found: {username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+            
+        if not await authenticate_user(user, password):
+            logger.warning(f"Invalid password for user: {username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+        
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.email}, expires_delta=access_token_expires
         )
-    
-    access_token_expires = timedelta(minutes=30)
-    access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+        return {"access_token": access_token, "token_type": "bearer"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login error: {str(e)}"
+        )
 
 @app.get("/auth/me")
 async def read_users_me(current_user: User = Depends(get_current_user)):

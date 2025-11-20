@@ -20,8 +20,11 @@ const Register = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password !== confirmPassword) {
-      // Show error message
-      console.error("Passwords don't match");
+      toast({
+        variant: "destructive",
+        title: "Password mismatch",
+        description: "Passwords don't match. Please try again.",
+      });
       return;
     }
 
@@ -36,13 +39,25 @@ const Register = () => {
       });
       
       if (response.ok) {
-        // Registration successful
+        toast({
+          title: "Success",
+          description: "Registration successful! Please login.",
+        });
         navigate("/login");
       } else {
-        // Handle error
-        console.error("Registration failed");
+        const errorData = await response.json().catch(() => null);
+        toast({
+          variant: "destructive",
+          title: "Registration failed",
+          description: errorData?.detail || "Please try again with different credentials.",
+        });
       }
     } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "An error occurred during registration. Please try again.",
+      });
       console.error("Error during registration:", error);
     }
   };

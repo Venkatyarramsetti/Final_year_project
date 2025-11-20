@@ -158,10 +158,3 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) for the object detection model
-- [TACO Dataset](https://github.com/pedropro/TACO) for garbage detection training data
-- [Shadcn/ui](https://ui.shadcn.com/) for the UI components
-- [FastAPI](https://fastapi.tiangolo.com/) for the backend framework
