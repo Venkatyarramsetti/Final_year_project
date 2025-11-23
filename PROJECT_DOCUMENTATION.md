@@ -9,6 +9,7 @@
 
 ---
 
+
 # Table of Contents
 
 1. [Executive Summary](#executive-summary)
@@ -358,9 +359,7 @@ pip install -r requirements.txt
 
 Verify `.env` file contains:
 ```env
-MONGODB_URI=mongodb+srv://venkatyarramsetti33:tGNH7Nd1mbo8tUFA@venkat.exddh5p.mongodb.net/?retryWrites=true&w=majority&appName=venkat
-SECRET_KEY=your-secret-key-keep-it-secret
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+i will give you 
 ```
 
 ### Step 6: Download YOLOv8 Model (if missing)

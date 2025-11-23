@@ -17,7 +17,13 @@ from models import UserCreate, UserLogin, Token
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES
 from datetime import timedelta
 import json
-from temp_utils import get_temp_path
+import tempfile
+
+# Helper function for temporary file paths
+def get_temp_path(filename: str) -> str:
+    """Get temporary file path"""
+    temp_dir = tempfile.gettempdir()
+    return os.path.join(temp_dir, filename)
 
 # Import enhanced features (waste categorization & IoT integration)
 try:
