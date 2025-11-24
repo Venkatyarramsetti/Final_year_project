@@ -223,8 +223,9 @@ class IoTManager:
         # Sort by fill level (descending)
         target_bins.sort(key=lambda b: b.fill_level_percent, reverse=True)
         
-        # TODO: Optimize route using TSP algorithm with lat/lon
-        # For now, just return sorted by fill level
+        # NOTE: Future enhancement - implement TSP (Traveling Salesman Problem) algorithm
+        # with actual GPS coordinates for optimal route planning
+        # Current implementation prioritizes bins by fill level
         
         return [
             {
@@ -323,8 +324,9 @@ class IoTManager:
         logger.info(f"MQTT Publish: {topic}")
         logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
         
-        # TODO: Replace with actual MQTT client (paho-mqtt)
-        # self.mqtt_client.publish(topic, json.dumps(payload))
+        # NOTE: For production deployment, integrate paho-mqtt client:
+        # Install: pip install paho-mqtt
+        # Uncomment: self.mqtt_client.publish(topic, json.dumps(payload))
     
     async def handle_mqtt_message(self, topic: str, payload: str):
         """

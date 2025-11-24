@@ -11,7 +11,7 @@ import traceback
 from typing import Annotated
 from PIL import Image
 import base64
-from model_manager import GarbageDetectionModel
+from model_manager import ModelManager
 from database import get_db, User, users, init_db
 from models import UserCreate, UserLogin, Token
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -57,7 +57,7 @@ if EXTENSIONS_AVAILABLE:
     app.include_router(extensions_router)
     logger.info("✓ Advanced API endpoints registered")
 
-# Add exception handler for debugging
+# Global exception handler for unhandled errors
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     error_detail = {
@@ -127,7 +127,7 @@ async def detect_hazards(file: UploadFile = File(...)):
     if model_manager is None:
         try:
             logger.info("Loading model for first detection request...")
-            model_manager = GarbageDetectionModel()
+            model_manager = ModelManager()
             logger.info("Model loaded successfully!")
         except Exception as e:
             logger.error(f"Error loading model: {e}")

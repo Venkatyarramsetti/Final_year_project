@@ -89,7 +89,6 @@ const Detection = () => {
       }
     } catch (err) {
       setError(`Error: ${err instanceof Error ? err.message : 'Unknown error occurred'}`);
-      console.error('Detection error:', err);
     } finally {
       setIsLoading(false);
     }

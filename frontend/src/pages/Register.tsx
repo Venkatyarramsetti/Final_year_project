@@ -58,7 +58,6 @@ const Register = () => {
         title: "Error",
         description: "An error occurred during registration. Please try again.",
       });
-      console.error("Error during registration:", error);
     }
   };
 

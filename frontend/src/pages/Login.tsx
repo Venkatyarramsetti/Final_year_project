@@ -48,7 +48,6 @@ const Login = () => {
         title: "Error",
         description: "An error occurred during login. Please try again.",
       });
-      console.error("Error during login:", error);
     }
   };
 

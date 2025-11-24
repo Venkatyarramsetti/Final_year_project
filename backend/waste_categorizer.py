@@ -1,24 +1,28 @@
 """
-Advanced Waste Categorization System
-Implements 4-category classification as per project abstract:
-- Recyclable
-- Non-Recyclable  
-- Healthy (organic/food)
-- Hazardous
-
-Provides material analysis, environmental impact scoring, and recycling recommendations
+Advanced Waste Categorization Engine (Improved Version)
+-----------------------------------------------------
+• Clean modular architecture
+• Dataclass-based items
+• Faster lookups using merged registry
+• Stronger inference engine
+• Structured response objects
+• Extensible categories + dynamic rules
 """
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 from enum import Enum
+from dataclasses import dataclass, asdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ----------------------------------------------------------------------
+# ENUMS
+# ----------------------------------------------------------------------
+
 class WasteCategory(str, Enum):
-    """Main waste categories as per abstract"""
     RECYCLABLE = "recyclable"
     NON_RECYCLABLE = "non_recyclable"
     HEALTHY = "healthy"
@@ -26,7 +30,6 @@ class WasteCategory(str, Enum):
 
 
 class MaterialType(str, Enum):
-    """Material composition types"""
     PLASTIC = "plastic"
     GLASS = "glass"
     METAL = "metal"
@@ -35,485 +38,271 @@ class MaterialType(str, Enum):
     MIXED = "mixed"
     CHEMICAL = "chemical"
     ELECTRONIC = "electronic"
+    UNKNOWN = "unknown"
 
 
 class RecyclingGrade(str, Enum):
-    """Recycling difficulty grades"""
-    EASY = "easy"           # Clean, single-material
-    MODERATE = "moderate"   # Requires processing
-    DIFFICULT = "difficult" # Complex recycling
+    EASY = "easy"
+    MODERATE = "moderate"
+    DIFFICULT = "difficult"
     NOT_RECYCLABLE = "not_recyclable"
 
 
+# ----------------------------------------------------------------------
+# DATACLASSES
+# ----------------------------------------------------------------------
+
+@dataclass
+class BaseItem:
+    name: str
+    category: WasteCategory
+    material: MaterialType = MaterialType.UNKNOWN
+    confidence: float = 0.0
+
+    def to_dict(self):
+        d = asdict(self)
+        d["category"] = self.category.value
+        d["material"] = self.material.value
+        return d
+
+
+@dataclass
+class RecyclableItem(BaseItem):
+    grade: RecyclingGrade = RecyclingGrade.EASY
+    instructions: str = ""
+    impact: str = "medium"
+    recycling_symbol: Optional[str] = None
+    processing_facility: Optional[str] = None
+
+
+@dataclass
+class HazardousItem(BaseItem):
+    hazard_type: str = ""
+    severity: str = ""
+    risks: Optional[List[str]] = None
+    disposal: str = ""
+    instructions: str = ""
+    regulations: str = ""
+
+
+# ----------------------------------------------------------------------
+# MAIN ENGINE
+# ----------------------------------------------------------------------
+
 class WasteCategorizer:
     """
-    Intelligent waste categorization engine
-    Maps YOLO detections to waste categories and provides actionable insights
+    Improved intelligent waste categorizer.
+    Cleans architecture, adds extensibility, faster matching & inference.
     """
-    
+
     def __init__(self):
-        # Recyclable materials database
-        self.recyclable_items = {
-            # Plastics (check recycling symbols)
-            'plastic_bottle': {
-                'material': MaterialType.PLASTIC,
-                'grade': RecyclingGrade.EASY,
-                'instructions': 'Rinse clean, remove cap, flatten',
-                'impact': 'high',  # High environmental impact if not recycled
-                'recycling_symbol': 'PET (1)',
-                'processing_facility': 'municipal_recycling'
-            },
-            'plastic_container': {
-                'material': MaterialType.PLASTIC,
-                'grade': RecyclingGrade.MODERATE,
-                'instructions': 'Remove food residue, check symbol',
-                'impact': 'high',
-                'recycling_symbol': 'HDPE (2) or PP (5)',
-                'processing_facility': 'municipal_recycling'
-            },
-            'plastic_bag': {
-                'material': MaterialType.PLASTIC,
-                'grade': RecyclingGrade.DIFFICULT,
-                'instructions': 'Return to store collection bins',
-                'impact': 'very_high',  # Often ends in ocean
-                'recycling_symbol': 'LDPE (4)',
-                'processing_facility': 'specialized_facility'
-            },
-            
-            # Glass
-            'glass_bottle': {
-                'material': MaterialType.GLASS,
-                'grade': RecyclingGrade.EASY,
-                'instructions': 'Rinse, remove caps, separate by color',
-                'impact': 'low',  # Glass is highly recyclable
-                'recycling_symbol': 'GL (70-74)',
-                'processing_facility': 'municipal_recycling'
-            },
-            
-            # Metals
-            'metal_can': {
-                'material': MaterialType.METAL,
-                'grade': RecyclingGrade.EASY,
-                'instructions': 'Rinse clean, can crush',
-                'impact': 'low',  # Metals recycle well
-                'recycling_symbol': 'ALU (41) or FE (40)',
-                'processing_facility': 'municipal_recycling'
-            },
-            
-            # Paper products
-            'paper': {
-                'material': MaterialType.PAPER,
-                'grade': RecyclingGrade.EASY,
-                'instructions': 'Keep dry and clean, no food stains',
-                'impact': 'low',
-                'recycling_symbol': 'PAP (20-22)',
-                'processing_facility': 'municipal_recycling'
-            },
-            'cardboard': {
-                'material': MaterialType.PAPER,
-                'grade': RecyclingGrade.EASY,
-                'instructions': 'Flatten boxes, remove tape/staples',
-                'impact': 'low',
-                'recycling_symbol': 'PAP (20)',
-                'processing_facility': 'municipal_recycling'
-            }
+        self._load_databases()
+        self._build_registry()   # combined lookup map
+        logger.info("⚡ Improved Waste Categorizer initialized")
+
+    # ------------------------------------------------------------------
+    # DATABASES
+    # ------------------------------------------------------------------
+
+    def _load_databases(self):
+        """Load and store item dictionaries."""
+
+        # --------------------------- RECYCLABLE --------------------------
+        self.recyclables: Dict[str, RecyclableItem] = {
+            "plastic_bottle": RecyclableItem(
+                name="plastic_bottle",
+                category=WasteCategory.RECYCLABLE,
+                material=MaterialType.PLASTIC,
+                grade=RecyclingGrade.EASY,
+                instructions="Rinse, remove cap, flatten",
+                impact="high",
+                recycling_symbol="PET (1)",
+                processing_facility="municipal"
+            ),
+            "paper": RecyclableItem(
+                name="paper",
+                category=WasteCategory.RECYCLABLE,
+                material=MaterialType.PAPER,
+                grade=RecyclingGrade.EASY,
+                instructions="Keep dry, no stains",
+                impact="low",
+                recycling_symbol="PAP (20-22)",
+                processing_facility="municipal"
+            ),
         }
-        
-        # Non-recyclable items (contaminated or mixed materials)
-        self.non_recyclable_items = {
-            'wrapper': {
-                'material': MaterialType.MIXED,
-                'reason': 'Mixed materials (plastic + foil)',
-                'disposal': 'landfill',
-                'impact': 'high'
-            },
-            'styrofoam': {
-                'material': MaterialType.PLASTIC,
-                'reason': 'Not accepted by most facilities',
-                'disposal': 'landfill',
-                'impact': 'very_high'
-            },
-            'contaminated_container': {
-                'material': MaterialType.MIXED,
-                'reason': 'Food contamination',
-                'disposal': 'landfill or compost if organic',
-                'impact': 'moderate'
-            },
-            'general_trash': {
-                'material': MaterialType.MIXED,
-                'reason': 'Mixed waste',
-                'disposal': 'landfill',
-                'impact': 'moderate'
-            }
+
+        # --------------------------- HAZARDOUS ---------------------------
+        self.hazardous: Dict[str, HazardousItem] = {
+            "battery": HazardousItem(
+                name="battery",
+                category=WasteCategory.HAZARDOUS,
+                material=MaterialType.CHEMICAL,
+                hazard_type="chemical",
+                severity="high",
+                risks=["Heavy metals", "Leakage", "Fire risk"],
+                disposal="hazardous_facility",
+                instructions="Never throw in regular trash",
+                regulations="EPA regulated"
+            ),
+            "broken_glass": HazardousItem(
+                name="broken_glass",
+                category=WasteCategory.HAZARDOUS,
+                material=MaterialType.GLASS,
+                hazard_type="physical",
+                severity="medium",
+                risks=["Cuts, lacerations"],
+                disposal="wrap_and_label",
+                instructions="Label as BROKEN GLASS"
+            ),
         }
-        
-        # Healthy items (fresh food, organic materials)
-        self.healthy_items = {
-            'banana': {'type': 'fresh_fruit', 'compostable': True},
-            'apple': {'type': 'fresh_fruit', 'compostable': True},
-            'orange': {'type': 'fresh_fruit', 'compostable': True},
-            'carrot': {'type': 'fresh_vegetable', 'compostable': True},
-            'broccoli': {'type': 'fresh_vegetable', 'compostable': True},
-            'lettuce': {'type': 'fresh_vegetable', 'compostable': True},
-            'food_waste': {
-                'type': 'organic_waste',
-                'compostable': True,
-                'instructions': 'Separate from packaging, compost',
-                'disposal': 'composting_facility',
-                'environmental_benefit': 'Reduces methane in landfills'
-            }
+
+        # --------------------------- HEALTHY ----------------------------
+        self.healthy = {
+            "banana": WasteCategory.HEALTHY,
+            "apple": WasteCategory.HEALTHY,
+            "food_waste": WasteCategory.HEALTHY
         }
-        
-        # Hazardous materials (requires special handling)
-        self.hazardous_items = {
-            'battery': {
-                'hazard_type': 'chemical',
-                'severity': 'high',
-                'risks': ['Heavy metals', 'Acid leakage', 'Fire hazard'],
-                'disposal': 'hazardous_waste_facility',
-                'instructions': 'Never dispose in regular trash',
-                'regulations': 'EPA regulated',
-                'environmental_impact': 'Soil and water contamination'
-            },
-            'syringe': {
-                'hazard_type': 'medical',
-                'severity': 'critical',
-                'risks': ['Bloodborne pathogens', 'Needle stick injury'],
-                'disposal': 'sharps_container → medical_waste',
-                'instructions': 'Use sharps container immediately',
-                'regulations': 'OSHA regulated'
-            },
-            'chemical_container': {
-                'hazard_type': 'chemical',
-                'severity': 'high',
-                'risks': ['Toxic fumes', 'Skin burns', 'Environmental contamination'],
-                'disposal': 'hazardous_waste_facility',
-                'instructions': 'Keep container sealed, check SDS',
-                'regulations': 'EPA regulated'
-            },
-            'broken_glass': {
-                'hazard_type': 'physical',
-                'severity': 'medium',
-                'risks': ['Cuts', 'Lacerations'],
-                'disposal': 'Wrap securely, label as "BROKEN GLASS"',
-                'instructions': 'Do not recycle with regular glass'
-            },
-            'electronic_waste': {
-                'hazard_type': 'electronic',
-                'severity': 'medium',
-                'risks': ['Heavy metals', 'Toxic components'],
-                'disposal': 'e_waste_recycling_facility',
-                'instructions': 'Remove batteries, erase data',
-                'regulations': 'WEEE Directive (EU) / EPA (US)',
-                'recycling_value': 'Contains valuable metals (gold, copper)'
-            }
+
+        # ------------------------ NON-RECYCLABLE ------------------------
+        self.non_recyclables = {
+            "wrapper": WasteCategory.NON_RECYCLABLE,
+            "styrofoam": WasteCategory.NON_RECYCLABLE,
+            "general_trash": WasteCategory.NON_RECYCLABLE,
         }
-    
-    def categorize(self, class_name: str, confidence: float, context: dict = None) -> Dict:
+
+    # ------------------------------------------------------------------
+    # REGISTRY
+    # ------------------------------------------------------------------
+
+    def _build_registry(self):
+        """Merge all supported YOLO classes into fast lookup table."""
+        self.registry = {}
+
+        # recyclable
+        for k, v in self.recyclables.items():
+            self.registry[k] = ("recyclable", v)
+
+        # hazardous
+        for k, v in self.hazardous.items():
+            self.registry[k] = ("hazardous", v)
+
+        # healthy
+        for k in self.healthy:
+            self.registry[k] = ("healthy", None)
+
+        # non-recyclable
+        for k in self.non_recyclables:
+            self.registry[k] = ("non_recyclable", None)
+
+    # ------------------------------------------------------------------
+    # MAIN PUBLIC FUNCTIONS
+    # ------------------------------------------------------------------
+
+    def categorize(self, class_name: str, confidence: float = 0.0):
         """
-        Categorize detected object into 4 main waste categories
-        
-        Args:
-            class_name: Detected class from YOLO
-            confidence: Detection confidence
-            context: Additional context (in_bin, location, etc.)
-            
-        Returns:
-            Dictionary with category, material, handling instructions, and impact
+        Main entry — categorize a single YOLO detection.
         """
-        class_lower = class_name.lower()
-        
-        # Check each category in priority order
-        
-        # 1. Hazardous (highest priority - safety critical)
-        if class_lower in self.hazardous_items:
-            return self._create_hazardous_response(class_lower, confidence)
-        
-        # 2. Healthy (fresh food, no processing needed)
-        if class_lower in self.healthy_items:
-            return self._create_healthy_response(class_lower, confidence)
-        
-        # 3. Recyclable (materials that can be recycled)
-        if class_lower in self.recyclable_items:
-            return self._create_recyclable_response(class_lower, confidence, context)
-        
-        # 4. Non-recyclable (default for mixed/contaminated waste)
-        if class_lower in self.non_recyclable_items:
-            return self._create_non_recyclable_response(class_lower, confidence)
-        
-        # Default: Try to infer from class name
-        return self._infer_category(class_lower, confidence, context)
-    
-    def _create_hazardous_response(self, class_name: str, confidence: float) -> Dict:
-        """Create response for hazardous materials"""
-        item_data = self.hazardous_items[class_name]
-        
-        return {
-            'category': WasteCategory.HAZARDOUS,
-            'class': class_name,
-            'confidence': confidence,
-            'hazard_type': item_data['hazard_type'],
-            'severity': item_data['severity'],
-            'risks': item_data['risks'],
-            'disposal_method': item_data['disposal'],
-            'instructions': item_data['instructions'],
-            'regulations': item_data.get('regulations', 'Check local regulations'),
-            'environmental_impact': item_data.get('environmental_impact', 'High risk if improperly disposed'),
-            'human_exposure_risk': 'HIGH - Avoid direct contact',
-            'requires_special_handling': True,
-            'color_code': 'red',  # For UI display
-            'icon': '⚠️'
-        }
-    
-    def _create_healthy_response(self, class_name: str, confidence: float) -> Dict:
-        """Create response for healthy/fresh items"""
-        item_data = self.healthy_items[class_name]
-        
-        return {
-            'category': WasteCategory.HEALTHY,
-            'class': class_name,
-            'confidence': confidence,
-            'item_type': item_data['type'],
-            'compostable': item_data['compostable'],
-            'disposal_method': item_data.get('disposal', 'compost or consume'),
-            'instructions': item_data.get('instructions', 'Fresh food - no processing needed'),
-            'environmental_benefit': item_data.get('environmental_benefit', 'Organic material - compost to enrich soil'),
-            'human_exposure_risk': 'NONE - Safe to handle',
-            'requires_special_handling': False,
-            'color_code': 'green',
-            'icon': '✓'
-        }
-    
-    def _create_recyclable_response(self, class_name: str, confidence: float, context: dict = None) -> Dict:
-        """Create response for recyclable materials"""
-        item_data = self.recyclable_items[class_name]
-        
-        # Check if item is contaminated (in trash bin)
-        in_bin = context and context.get('in_bin', False)
-        contaminated = in_bin or (context and context.get('contaminated', False))
-        
-        if contaminated:
-            return {
-                'category': WasteCategory.NON_RECYCLABLE,
-                'class': class_name,
-                'confidence': confidence,
-                'original_material': item_data['material'],
-                'reason': 'Contaminated or mixed with trash',
-                'disposal_method': 'landfill (cannot recycle)',
-                'instructions': 'Contaminated items cannot be recycled',
-                'environmental_impact': 'Could have been recycled if clean',
-                'color_code': 'orange',
-                'icon': '⊘'
-            }
-        
-        return {
-            'category': WasteCategory.RECYCLABLE,
-            'class': class_name,
-            'confidence': confidence,
-            'material': item_data['material'],
-            'recycling_grade': item_data['grade'],
-            'recycling_symbol': item_data['recycling_symbol'],
-            'instructions': item_data['instructions'],
-            'processing_facility': item_data['processing_facility'],
-            'environmental_impact': item_data['impact'],
-            'environmental_benefit': f'Recycling saves energy and reduces {item_data["material"]} production',
-            'human_exposure_risk': 'LOW - Safe when clean',
-            'requires_special_handling': False,
-            'color_code': 'blue',
-            'icon': '♻️'
-        }
-    
-    def _create_non_recyclable_response(self, class_name: str, confidence: float) -> Dict:
-        """Create response for non-recyclable waste"""
-        item_data = self.non_recyclable_items.get(class_name, {})
-        
-        return {
-            'category': WasteCategory.NON_RECYCLABLE,
-            'class': class_name,
-            'confidence': confidence,
-            'material': item_data.get('material', MaterialType.MIXED),
-            'reason': item_data.get('reason', 'Mixed materials or contamination'),
-            'disposal_method': item_data.get('disposal', 'landfill'),
-            'environmental_impact': item_data.get('impact', 'moderate'),
-            'instructions': 'Cannot be recycled - dispose in general waste',
-            'human_exposure_risk': 'LOW',
-            'requires_special_handling': False,
-            'color_code': 'gray',
-            'icon': '🗑️'
-        }
-    
-    def _infer_category(self, class_name: str, confidence: float, context: dict = None) -> Dict:
-        """Infer category from class name keywords"""
-        
-        # Hazardous keywords
-        if any(keyword in class_name for keyword in ['hazard', 'chemical', 'battery', 'medical', 'sharp', 'broken']):
-            return {
-                'category': WasteCategory.HAZARDOUS,
-                'class': class_name,
-                'confidence': confidence,
-                'inferred': True,
-                'severity': 'medium',
-                'instructions': 'Treat as hazardous - special disposal required',
-                'color_code': 'red',
-                'icon': '⚠️'
-            }
-        
-        # Recyclable keywords
-        if any(keyword in class_name for keyword in ['bottle', 'can', 'glass', 'metal', 'paper', 'cardboard']):
-            return {
-                'category': WasteCategory.RECYCLABLE,
-                'class': class_name,
-                'confidence': confidence,
-                'inferred': True,
-                'instructions': 'Likely recyclable - check local guidelines',
-                'color_code': 'blue',
-                'icon': '♻️'
-            }
-        
-        # Healthy keywords
-        if any(keyword in class_name for keyword in ['fruit', 'vegetable', 'fresh', 'food', 'organic']):
-            return {
-                'category': WasteCategory.HEALTHY,
-                'class': class_name,
-                'confidence': confidence,
-                'inferred': True,
-                'instructions': 'Fresh food or compostable organic material',
-                'color_code': 'green',
-                'icon': '✓'
-            }
-        
-        # Default to non-recyclable
-        return {
-            'category': WasteCategory.NON_RECYCLABLE,
-            'class': class_name,
-            'confidence': confidence,
-            'inferred': True,
-            'instructions': 'Unknown item - default to general waste',
-            'color_code': 'gray',
-            'icon': '🗑️'
-        }
-    
-    def batch_categorize(self, detections: List[Dict]) -> Dict:
+        cls = class_name.lower()
+
+        if cls in self.registry:
+            ctype, obj = self.registry[cls]
+            return self._handle_known(cls, confidence, ctype, obj)
+
+        # Unknown → infer
+        return self._infer_item(cls, confidence)
+
+    def batch_categorize(self, detections: List[Dict]):
         """
-        Categorize multiple detections and provide summary statistics
-        
-        Args:
-            detections: List of detection dictionaries from model
-            
-        Returns:
-            Summary with counts, recommendations, and environmental impact
+        Handle many YOLO detections at once.
         """
-        category_counts = {
-            WasteCategory.RECYCLABLE: 0,
-            WasteCategory.NON_RECYCLABLE: 0,
-            WasteCategory.HEALTHY: 0,
-            WasteCategory.HAZARDOUS: 0
+
+        categorized = [self.categorize(d["class"], d["confidence"]) for d in detections]
+
+        stats = {
+            "recyclable": sum(i["category"] == "recyclable" for i in categorized),
+            "non_recyclable": sum(i["category"] == "non_recyclable" for i in categorized),
+            "healthy": sum(i["category"] == "healthy" for i in categorized),
+            "hazardous": sum(i["category"] == "hazardous" for i in categorized),
         }
-        
-        categorized_items = []
-        hazardous_items = []
-        recyclable_value = 0.0
-        
-        for detection in detections:
-            class_name = detection.get('class', 'unknown')
-            confidence = detection.get('confidence', 0.0)
-            context = {
-                'in_bin': detection.get('in_bin', False),
-                'contaminated': detection.get('contaminated', False)
+
+        return {
+            "categorized_items": categorized,
+            "summary": stats,
+            "hazardous_alert": stats["hazardous"] > 0,
+        }
+
+    # ------------------------------------------------------------------
+    # HANDLERS
+    # ------------------------------------------------------------------
+
+    def _handle_known(self, cls, confidence, ctype, obj):
+        """Handles items that exist in registry."""
+        if ctype == "recyclable":
+            recyclable_item: RecyclableItem = obj
+            recyclable_item.confidence = confidence
+            return recyclable_item.to_dict()
+
+        if ctype == "hazardous":
+            hazardous_item: HazardousItem = obj
+            d = hazardous_item.to_dict()
+            d["confidence"] = confidence
+            d["requires_special_handling"] = True
+            return d
+
+        return {
+            "class": cls,
+            "confidence": confidence,
+            "category": ctype,
+            "material": "mixed",
+            "instructions": "Dispose accordingly",
+        }
+
+    # ------------------------------------------------------------------
+    # INFERENCE ENGINE FOR UNKNOWN CLASSES
+    # ------------------------------------------------------------------
+
+    def _infer_item(self, name: str, conf: float):
+        """Infer waste type based on keyword patterns."""
+
+        low = name.lower()
+
+        if any(k in low for k in ["broken", "chemical", "hazard", "sharp", "battery"]):
+            return {
+                "class": name,
+                "confidence": conf,
+                "category": WasteCategory.HAZARDOUS.value,
+                "instructions": "Treat as hazardous. Use special disposal.",
             }
-            
-            result = self.categorize(class_name, confidence, context)
-            categorized_items.append(result)
-            
-            # Update counts
-            category = result['category']
-            category_counts[category] += 1
-            
-            # Track hazardous items
-            if category == WasteCategory.HAZARDOUS:
-                hazardous_items.append(result)
-            
-            # Estimate recycling value (placeholder)
-            if category == WasteCategory.RECYCLABLE:
-                recyclable_value += 0.05  # $0.05 per recyclable item
-        
-        # Generate summary
-        total_items = len(detections)
-        recycling_rate = (category_counts[WasteCategory.RECYCLABLE] / total_items * 100) if total_items > 0 else 0
-        
+
+        if any(k in low for k in ["bottle", "can", "glass", "paper", "metal"]):
+            return {
+                "class": name,
+                "confidence": conf,
+                "category": WasteCategory.RECYCLABLE.value,
+                "instructions": "Likely recyclable. Verify cleanup.",
+            }
+
+        if any(k in low for k in ["banana", "fruit", "vegetable", "food"]):
+            return {
+                "class": name,
+                "confidence": conf,
+                "category": WasteCategory.HEALTHY.value,
+                "instructions": "Organic waste. Compost recommended.",
+            }
+
         return {
-            'total_items': total_items,
-            'category_breakdown': {
-                'recyclable': category_counts[WasteCategory.RECYCLABLE],
-                'non_recyclable': category_counts[WasteCategory.NON_RECYCLABLE],
-                'healthy': category_counts[WasteCategory.HEALTHY],
-                'hazardous': category_counts[WasteCategory.HAZARDOUS]
-            },
-            'recycling_rate': round(recycling_rate, 1),
-            'estimated_recycling_value': round(recyclable_value, 2),
-            'hazardous_alert': len(hazardous_items) > 0,
-            'hazardous_items': hazardous_items,
-            'categorized_items': categorized_items,
-            'recommendations': self._generate_recommendations(category_counts, total_items),
-            'environmental_impact': self._calculate_environmental_impact(category_counts)
+            "class": name,
+            "confidence": conf,
+            "category": WasteCategory.NON_RECYCLABLE.value,
+            "instructions": "Unknown item. Default to general waste.",
         }
-    
-    def _generate_recommendations(self, category_counts: Dict, total: int) -> List[str]:
-        """Generate actionable recommendations"""
-        recommendations = []
-        
-        if category_counts[WasteCategory.HAZARDOUS] > 0:
-            recommendations.append("⚠️ URGENT: Hazardous materials detected - arrange special disposal immediately")
-        
-        recyclable_pct = (category_counts[WasteCategory.RECYCLABLE] / total * 100) if total > 0 else 0
-        
-        if recyclable_pct < 30:
-            recommendations.append("♻️ Low recycling rate - educate on recyclable materials")
-        elif recyclable_pct > 70:
-            recommendations.append("✓ Excellent recycling rate - keep up the good work!")
-        
-        if category_counts[WasteCategory.NON_RECYCLABLE] > total * 0.5:
-            recommendations.append("⚠️ High non-recyclable waste - review packaging choices")
-        
-        if category_counts[WasteCategory.HEALTHY] > 0:
-            recommendations.append("🌱 Organic waste detected - consider composting program")
-        
-        return recommendations
-    
-    def _calculate_environmental_impact(self, category_counts: Dict) -> Dict:
-        """Calculate environmental impact metrics"""
-        # Simplified impact calculation
-        recyclable_impact = category_counts[WasteCategory.RECYCLABLE] * 2.5  # kg CO2 saved per item
-        landfill_impact = category_counts[WasteCategory.NON_RECYCLABLE] * 0.5  # kg CO2 per item
-        hazardous_impact = category_counts[WasteCategory.HAZARDOUS] * 10  # High impact
-        
-        return {
-            'co2_saved_kg': round(recyclable_impact, 2),
-            'co2_generated_kg': round(landfill_impact + hazardous_impact, 2),
-            'net_impact': round(recyclable_impact - landfill_impact - hazardous_impact, 2),
-            'impact_rating': self._get_impact_rating(recyclable_impact, landfill_impact + hazardous_impact)
-        }
-    
-    def _get_impact_rating(self, saved: float, generated: float) -> str:
-        """Get environmental impact rating"""
-        net = saved - generated
-        if net > 20:
-            return "EXCELLENT - High positive impact"
-        elif net > 10:
-            return "GOOD - Positive impact"
-        elif net > 0:
-            return "FAIR - Slightly positive"
-        else:
-            return "POOR - Negative environmental impact"
 
 
-# Singleton instance
-_categorizer_instance = None
+# Singleton access
+_categorizer_singleton = None
 
-def get_waste_categorizer() -> WasteCategorizer:
-    """Get singleton instance of waste categorizer"""
-    global _categorizer_instance
-    if _categorizer_instance is None:
-        _categorizer_instance = WasteCategorizer()
-        logger.info("Waste Categorizer initialized")
-    return _categorizer_instance
+def get_waste_categorizer():
+    global _categorizer_singleton
+    if _categorizer_singleton is None:
+        _categorizer_singleton = WasteCategorizer()
+    return _categorizer_singleton

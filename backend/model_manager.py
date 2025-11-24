@@ -1,387 +1,358 @@
+# model_manager.py
 import os
+import time
 import base64
 import cv2
 import logging
 import threading
-from ultralytics import YOLO
-from typing import Dict
 import numpy as np
+from typing import Dict, List, Optional, Tuple, Any
+from ultralytics import YOLO  # type: ignore
+import torch
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class GarbageDetectionModel:
-    def __init__(self):
-        self.model = None
-        self.class_names = {}
+class ModelManager:
+    def __init__(self,
+                 model_paths: Optional[List[str]] = None,
+                 conf_threshold: float = 0.45,
+                 iou_threshold: float = 0.45,
+                 imgsz: int = 1280,
+                 max_det: int = 500,
+                 enable_tta: bool = True,
+                 use_half_if_cuda: bool = True):
         self.lock = threading.Lock()
-        
-        # Optimized high-accuracy inference settings
-        self.conf_threshold = 0.25  # Lower threshold to catch more objects including plastics
-        self.iou_threshold = 0.45   # IoU threshold for NMS
-        self.imgsz = 1280           # Larger image size for better accuracy
-        self.max_det = 500          # Maximum detections per image
-        
-        # Hazard severity mapping
+        self.model = None
+        self.class_names: Dict[int, str] = {}
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.use_half = use_half_if_cuda and (self.device == "cuda")
+        self.conf_threshold = conf_threshold
+        self.iou_threshold = iou_threshold
+        self.imgsz = imgsz
+        self.max_det = max_det
+        self.enable_tta = enable_tta
+        self.warmup_done = False
+        self.model_paths = model_paths or [
+            "yolov8n.pt",  # Nano - fastest
+            "yolov8s.pt",  # Small - balanced
+            "yolov8m.pt",  # Medium - good accuracy
+            "yolov8l.pt",  # Large - better accuracy
+            "yolov8x.pt",  # Extra large - best accuracy
+            "models/best.pt",
+            "runs/hazard_model/train/weights/best.pt",
+            "models/garbage_detection_model.pt"
+        ]
         self.hazard_severity = {
-            'fire': 'critical',
-            'smoke': 'critical',
-            'gas_leak': 'critical',
-            'chemical_spill': 'high',
-            'electrical_hazard': 'high',
-            'exposed_wires': 'high',
-            'sharp_object': 'high',
-            'broken_glass': 'high',
-            'biohazard_waste': 'high',
-            'medical_waste': 'medium',
-            'overflowing_trash': 'medium',
-            'wet_floor': 'medium',
-            'slippery_surface': 'medium',
-            'oil_spill': 'medium',
-            'fallen_debris': 'low',
-            'plastic_bag': 'medium',
-            'plastic_wrap': 'medium',
-            'disposable_container': 'low'
+            'fire': 'critical', 'smoke': 'critical', 'gas_leak': 'critical',
+            'chemical_spill': 'high', 'electrical_hazard': 'high',
+            'exposed_wires': 'high', 'sharp_object': 'high', 'broken_glass': 'high',
+            'biohazard_waste': 'high', 'medical_waste': 'medium',
+            'overflowing_trash': 'medium', 'wet_floor': 'medium',
+            'slippery_surface': 'medium', 'oil_spill': 'medium',
+            'fallen_debris': 'low', 'plastic_bag': 'high', 'plastic_wrap': 'medium'
         }
-        
-        # WASTE-SPECIFIC DETECTION: Items considered as waste/hazard
-        # Based on TACO (Trash Annotations in Context) categories
-        self.waste_items = [
-            # Plastic waste (HIGH hazard - pollution)
-            'bottle', 'plastic bottle', 'water bottle', 'pet bottle',
-            'plastic bag', 'plastic container', 'plastic wrapper', 'plastic cup',
-            'disposable cup', 'plastic cutlery', 'straw', 'lid', 'cap',
-            # Paper waste
-            'paper', 'cardboard', 'newspaper', 'magazine', 'paper bag',
-            'tissue', 'napkin', 'paper cup', 'pizza box',
-            # Metal waste
-            'can', 'aluminum can', 'tin can', 'metal container', 'foil',
-            # Glass waste
-            'glass bottle', 'broken glass', 'glass container',
-            # Food waste
-            'food waste', 'organic waste', 'leftovers', 'scraps',
-            # General trash
-            'trash', 'garbage', 'waste', 'litter', 'rubbish', 'refuse',
-            'overflowing trash', 'trash bag', 'garbage bag',
-            # Packaging
-            'packaging', 'wrapper', 'box', 'carton', 'container',
-            # Other waste
-            'cigarette butt', 'cigarette', 'cup', 'bowl'
+        self.waste_keywords = [
+            'trash', 'garbage', 'waste', 'litter', 'debris', 'rubbish'
         ]
-        
-        # Safe items (fresh food, clean utensils NOT in trash context)
-        self.safe_items = [
-            'banana', 'apple', 'orange', 'carrot', 'broccoli',
-            'person', 'chair', 'table', 'laptop', 'book',
-            'car', 'bicycle', 'tree', 'plant', 'flower'
+        self.safe_keywords = [
+            # Foods
+            'banana', 'apple', 'orange', 'carrot', 'broccoli', 'pizza', 'donut',
+            'cake', 'sandwich', 'hot dog', 'hamburger', 'fruit', 'vegetable',
+            # People & Animals
+            'person', 'people', 'dog', 'cat', 'bird', 'horse', 'sheep', 'cow',
+            # Furniture & Objects
+            'chair', 'table', 'couch', 'bed', 'desk', 'bench', 'plant', 'vase',
+            'book', 'clock', 'laptop', 'keyboard', 'mouse', 'phone', 'tv',
+            # Vehicles
+            'car', 'truck', 'bus', 'bicycle', 'motorcycle', 'train',
+            # Nature
+            'tree', 'flower', 'grass', 'sky', 'cloud'
         ]
-        
-        logger.info("Initializing Hazard Detection Model with high-accuracy settings...")
-        self.setup_model()
-        logger.info("Model initialized successfully!")
+        self._load_model()
+        logger.info(f"ModelManager ready on device={self.device} half={self.use_half}")
 
-    def setup_model(self):
-        """Initialize and setup the YOLO model with high-accuracy configuration"""
-        # Priority: best.pt > yolov8x-seg.pt (segmentation) > yolov8x.pt > yolov8l.pt
-        model_paths = [
-            "models/best.pt",                    # Trained high-accuracy model
-            "runs/hazard_model/train/weights/best.pt",  # Training output
-            "models/garbage_detection_model.pt", # Legacy model
-            "yolov8x-seg.pt",                    # Segmentation model (best for plastic/transparent)
-            "yolov8x.pt",                        # Extra-large detection
-            "yolov8l.pt"                         # Large model fallback
-        ]
-
-        try:
-            with self.lock:
-                logger.info("Setting up Hazard Detection Model with MAXIMUM ACCURACY...")
-                logger.info("Priority: Segmentation model for better plastic/transparent object detection")
-                
-                # Try to load models in priority order
-                for model_path in model_paths:
-                    if os.path.exists(model_path):
-                        logger.info(f"Loading model from {model_path}...")
-                        self.model = YOLO(model_path)
-                        logger.info(f"✓ Model loaded successfully: {model_path}")
+    def _load_model(self):
+        with self.lock:
+            for p in self.model_paths:
+                try:
+                    if os.path.exists(p):
+                        logger.info(f"Loading model -> {p}")
+                        self.model = YOLO(p)
                         break
-                else:
-                    # Download segmentation model for better plastic detection
-                    logger.info("Downloading YOLOv8x-seg (Segmentation) model for MAXIMUM accuracy...")
-                    logger.info("Segmentation model is BEST for detecting plastic bags and transparent objects!")
-                    logger.info("This may take a few minutes for first-time download...")
-                    self.model = YOLO('yolov8x-seg.pt')  # Use segmentation for plastic detection
-
-                if hasattr(self.model, 'names'):
-                    self.class_names = self.model.names
-                    logger.info(f"✓ Model loaded with {len(self.class_names)} classes")
-                    logger.info(f"✓ High-accuracy settings: conf={self.conf_threshold}, iou={self.iou_threshold}, imgsz={self.imgsz}")
-                    logger.info(f"✓ Test-Time Augmentation: ENABLED")
-                    logger.info(f"✓ Segmentation: ENABLED (better for plastics)")
-                    logger.info(f"✓ Safe items database: {len(self.safe_items)} categories")
-                else:
-                    logger.warning("Model doesn't have class names attribute")
-                    self.class_names = {}
-                    
-        except Exception as e:
-            logger.error(f"Error setting up segmentation model: {e}")
-            logger.info("Falling back to YOLOv8x detection model...")
-            try:
-                with self.lock:
-                    self.model = YOLO('yolov8x.pt')
-                    self.class_names = self.model.names if hasattr(self.model, 'names') else {}
-                logger.info("Fallback model (YOLOv8x) loaded successfully")
-            except Exception as fallback_error:
-                logger.error(f"Fallback model loading failed: {fallback_error}")
-                logger.critical("Unable to load any model. API will not function correctly.")
-                logger.info("Fallback model (YOLOv8l) loaded successfully")
-            except Exception as fallback_error:
-                logger.error(f"Fallback model loading failed: {fallback_error}")
-                logger.critical("Unable to load any model. API will not function correctly.")
-
-    def detect_and_categorize(self, image_path):
-        """Run detection on an image with high-accuracy settings and return categorized results"""
-        if self.model is None:
-            logger.error("Model is not initialized")
-            raise ValueError("Model is not initialized")
-
-        # Check if image exists and is readable
-        if not os.path.exists(image_path):
-            logger.error(f"Image path does not exist: {image_path}")
-            raise ValueError(f"Image path does not exist: {image_path}")
-
-        image = cv2.imread(image_path)
-        if image is None:
-            logger.error(f"Could not read image: {image_path}")
-            raise ValueError(f"Could not read image: {image_path}")
-
-        try:
-            # Run inference with MAXIMUM ACCURACY settings
-            with self.lock:
-                results = self.model.predict(
-                    source=image_path,
-                    imgsz=self.imgsz,           # Large image size for detail
-                    conf=self.conf_threshold,    # Lower threshold for sensitivity
-                    iou=self.iou_threshold,      # NMS IoU threshold
-                    max_det=self.max_det,        # Max detections
-                    augment=True,                # Test-time augmentation (TTA)
-                    agnostic_nms=False,          # Class-specific NMS
-                    half=False,                  # Full precision (FP32)
-                    verbose=False                # Suppress output
-                )
-            
-            detections = []
-            food_items_count = 0
-            total_items = 0
-            severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
-            
-            # Context detection: Check if trash bin/container present
-            detected_classes = []
-            for result in results:
-                if hasattr(result, 'boxes') and len(result.boxes) > 0:
-                    for box in result.boxes:
-                        if hasattr(box, 'cls') and len(box.cls) > 0:
-                            cls_id = int(box.cls[0])
-                            class_name = self.class_names.get(cls_id, '').lower()
-                            detected_classes.append(class_name)
-            
-            # Check for trash context
-            trash_context = any(keyword in ' '.join(detected_classes) for keyword in 
-                              ['trash', 'garbage', 'waste', 'bin', 'can', 'container', 'bag'])
-
-            # Process detections
-            for result in results:
-                if not hasattr(result, 'boxes') or len(result.boxes) == 0:
+                except Exception:
                     continue
-                    
-                for box in result.boxes:
-                    if not hasattr(box, 'cls') or not hasattr(box, 'conf') or not hasattr(box, 'xyxy'):
-                        continue
-                    if len(box.cls) == 0 or len(box.conf) == 0 or len(box.xyxy) == 0:
-                        continue
-                        
-                    cls_id = int(box.cls[0])
-                    conf = float(box.conf[0])
-                    class_name = self.class_names.get(cls_id, 'Unknown')
-                    coords = box.xyxy[0].tolist()
-                    x1, y1, x2, y2 = map(int, coords)
-                    
-                    # WASTE DETECTION LOGIC: Check if item is waste/hazard
-                    class_lower = class_name.lower()
-                    is_waste = any(waste_type in class_lower for waste_type in self.waste_items)
-                    is_safe = any(safe_type in class_lower for safe_type in self.safe_items) and not is_waste
-                    
-                    # CONTEXT-AWARE: If trash context detected, treat containers/bottles as waste
-                    if trash_context and ('bottle' in class_lower or 'cup' in class_lower or 
-                                         'bowl' in class_lower or 'container' in class_lower):
-                        is_waste = True
-                        is_safe = False
-                    
-                    # Count waste vs safe items
-                    if is_safe:
-                        food_items_count += 1
-                    total_items += 1
-                    
-                    # Determine hazard status based on waste detection
-                    if is_waste:
-                        hazard_status = 'Hazardous'
-                        # Assign severity based on waste type
-                        if 'plastic' in class_lower or 'bottle' in class_lower:
-                            severity = 'high'  # Plastic waste = environmental hazard
-                        elif 'trash' in class_lower or 'garbage' in class_lower:
-                            severity = 'medium'
-                        else:
-                            severity = 'low'
-                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
-                    elif is_safe:
-                        hazard_status = 'Safe'
-                        severity = 'safe'
-                    else:
-                        # Unknown items treated as potential waste
-                        hazard_status = 'Hazardous'
-                        severity = 'low'
-                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
-                    
-                    # Color coding based on waste detection
-                    if hazard_status == 'Safe':
-                        color = (0, 255, 0)  # Green
-                    elif severity == 'high':
-                        color = (0, 0, 255)  # Red - plastic/bottles
-                    elif severity == 'medium':
-                        color = (0, 165, 255)  # Orange - general trash
-                    else:
-                        color = (0, 255, 255)  # Yellow - low hazard waste
-
-                    # Draw detection rectangle and label
-                    cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
-                    label = f"{class_name} {conf:.2f}"
-                    if severity != 'safe' and severity != 'unknown':
-                        label += f" [WASTE-{severity}]"
-                    
-                    (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                    cv2.rectangle(image, (x1, y1 - label_height - 10), (x1 + label_width, y1), color, -1)
-                    cv2.putText(image, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                    detections.append({
-                        'class': class_name,
-                        'confidence': float(conf),
-                        'coordinates': [float(c) for c in coords],
-                        'health_status': hazard_status,
-                        'severity': severity,
-                        'bbox_area': (x2 - x1) * (y2 - y1)
-                    })
-
-            # Calculate statistics and accuracy metrics
-            is_mostly_food = (food_items_count / max(total_items, 1)) > 0.5
-            total_detections = len(detections)
-            hazardous_count = sum(1 for d in detections if d["health_status"] == "Hazardous")
-            safe_count = total_detections - hazardous_count
-            
-            # Calculate average confidence (accuracy indicator)
-            avg_confidence = sum(d['confidence'] for d in detections) / max(total_detections, 1) if detections else 0
-            
-            # IMPROVED: More realistic accuracy calculation with tiered thresholds
-            # High confidence: ≥0.6 (60%), Medium: 0.45-0.59, Low: <0.45
-            high_conf_count = sum(1 for d in detections if d['confidence'] >= 0.60)
-            medium_conf_count = sum(1 for d in detections if 0.45 <= d['confidence'] < 0.60)
-            
-            # Weighted accuracy: high conf = 100%, medium = 70%, low = 30%
-            if total_detections > 0:
-                weighted_score = (high_conf_count * 1.0) + (medium_conf_count * 0.7) + ((total_detections - high_conf_count - medium_conf_count) * 0.3)
-                model_accuracy = (weighted_score / total_detections) * 100
+            if self.model is None:
+                logger.info("No local model found, attempting to download yolov8x-seg")
+                self.model = YOLO("yolov8x-seg.pt")
+            if hasattr(self.model, "names"):
+                self.class_names = {int(k): v for k, v in self.model.names.items()} if isinstance(self.model.names, dict) else {i: n for i, n in enumerate(self.model.names)}
             else:
-                model_accuracy = 0
-            
-            # Determine overall risk level
-            if severity_counts['critical'] > 0:
-                overall_risk = 'critical'
-            elif severity_counts['high'] > 0:
-                overall_risk = 'high'
-            elif severity_counts['medium'] > 0:
-                overall_risk = 'medium'
-            elif hazardous_count > 0:
-                overall_risk = 'low'
-            else:
-                overall_risk = 'safe'
-            
-            # Convert the annotated image to base64
-            _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            img_base64 = base64.b64encode(buffer).decode('utf-8')
+                self.class_names = {}
+            try:
+                if self.device == "cuda":
+                    self.model.to("cuda")
+                if self.use_half and hasattr(self.model, "model") and hasattr(self.model.model, "half"):
+                    try:
+                        self.model.model.half()  # type: ignore
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self._warmup()
 
-            return {
-                "total_detections": total_detections,
-                "hazardous_count": hazardous_count,
-                "safe_count": safe_count,
-                "overall_assessment": "Safe" if is_mostly_food or hazardous_count == 0 else "Hazardous",
-                "overall_risk_level": overall_risk,
-                "severity_breakdown": severity_counts,
-                "average_confidence": round(avg_confidence, 4),
-                "model_accuracy": round(model_accuracy, 2),  # Weighted accuracy (realistic)
-                "high_confidence_detections": high_conf_count,  # Detections with ≥60% confidence
-                "medium_confidence_detections": medium_conf_count,  # Detections 45-59%
-                "detections": detections,
-                "annotated_image": img_base64,
-                "model_settings": {
-                    "model_type": "YOLOv8x-seg (Segmentation)" if "-seg" in str(self.model.ckpt_path) else "YOLOv8x (Detection)",
-                    "confidence_threshold": self.conf_threshold,
-                    "iou_threshold": self.iou_threshold,
-                    "image_size": self.imgsz,
-                    "augmentation": "Test-Time Augmentation (TTA)",
-                    "precision": "FP32 (Full Precision)",
-                    "segmentation": "Enabled for better plastic detection" if "-seg" in str(self.model.ckpt_path) else "Detection only"
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error during detection: {e}")
-            raise ValueError(f"Detection failed: {str(e)}")
-
-    def get_class_names(self):
-        """Get model class names"""
-        return self.class_names
-
-    def get_health_hazard_mapping(self):
-        """Get mapping of class names to health hazard status"""
-        return {name: 'Safe' if name.lower() in self.safe_items else 'Hazardous'
-                for name in self.class_names.values()}
-    
-    def update_weights(self, new_model_path: str):
-        """Update model weights with new trained model"""
+    def _warmup(self):
+        if self.warmup_done or self.model is None:
+            return
         try:
-            with self.lock:
-                logger.info(f"Updating model weights from: {new_model_path}")
-                self.model = YOLO(new_model_path)
-                if hasattr(self.model, 'names'):
-                    self.class_names = self.model.names
-                logger.info("Model weights updated successfully")
-        except Exception as e:
-            logger.error(f"Failed to update model weights: {e}")
-            raise
-    
-    def update_inference_settings(self, conf: float = None, iou: float = None, imgsz: int = None):
-        """Update inference settings for accuracy tuning"""
-        if conf is not None:
-            self.conf_threshold = max(0.0, min(1.0, conf))
-            logger.info(f"Confidence threshold updated to: {self.conf_threshold}")
-        if iou is not None:
-            self.iou_threshold = max(0.0, min(1.0, iou))
-            logger.info(f"IoU threshold updated to: {self.iou_threshold}")
-        if imgsz is not None:
-            self.imgsz = imgsz
-            logger.info(f"Image size updated to: {self.imgsz}")
-    
-    def get_model_info(self) -> dict:
-        """Get current model information and settings"""
+            dummy = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
+            start = time.time()
+            self.model.predict(source=dummy, imgsz=self.imgsz, conf=0.001, iou=0.5, max_det=1)
+            self.warmup_time = time.time() - start
+            self.warmup_done = True
+            logger.info(f"Model warmup done in {self.warmup_time:.3f}s")
+        except Exception:
+            self.warmup_time = 0.0
+            self.warmup_done = True
+
+    def _preprocess(self, image_path: str) -> Tuple[np.ndarray, Tuple[int, int]]:
+        img = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR) if os.path.isfile(image_path) else None
+        if img is None:
+            img = cv2.imread(image_path)
+        if img is None:
+            raise ValueError("Unable to read image")
+        h, w = img.shape[:2]
+        max_side = max(h, w)
+        scale = 1.0
+        if max_side > self.imgsz:
+            scale = self.imgsz / max_side
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        img = cv2.bilateralFilter(img, d=5, sigmaColor=75, sigmaSpace=75)
+        return img, (h, w)
+
+    def _size_boost_confidence(self, box_xyxy: List[float], conf: float, orig_shape: Tuple[int, int]) -> float:
+        x1, y1, x2, y2 = box_xyxy
+        area = (x2 - x1) * (y2 - y1)
+        h, w = orig_shape
+        img_area = h * w
+        rel_area = (area / img_area) if img_area > 0 else 0
+        if rel_area > 0.25:
+            return min(1.0, conf + 0.12)
+        if rel_area > 0.05:
+            return min(1.0, conf + 0.05)
+        if rel_area < 0.001:
+            return max(0.0, conf - 0.12)
+        return conf
+
+    def detect_and_categorize(self, image_path: str, min_conf: Optional[float] = None) -> Dict:
+        if self.model is None:
+            raise RuntimeError("Model not loaded")
+        start_total = time.time()
+        img, orig_shape = self._preprocess(image_path)
+        preprocess_time = time.time() - start_total
+        conf = self.conf_threshold if min_conf is None else max(min_conf, self.conf_threshold)
+        predict_kwargs = {
+            "source": img,
+            "imgsz": self.imgsz,
+            "conf": conf,
+            "iou": self.iou_threshold,
+            "max_det": self.max_det,
+            "augment": self.enable_tta,
+            "verbose": False
+        }
+        if self.device == "cuda" and self.use_half:
+            predict_kwargs["half"] = True
+        with self.lock:
+            t0 = time.time()
+            results = self.model.predict(**predict_kwargs)
+            infer_time = time.time() - t0
+        detections = []
+        annotated = img.copy()
+        severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        detected_classes = []
+        for res in results:
+            boxes = getattr(res, "boxes", None)
+            masks = getattr(res, "masks", None)
+            if boxes is None or len(boxes) == 0:
+                continue
+            for i, box in enumerate(boxes):
+                try:
+                    cls_id = int(box.cls.cpu().numpy()[0]) if hasattr(box, "cls") else int(box.cls[0])
+                except Exception:
+                    cls_id = int(box.cls[0]) if hasattr(box, "cls") else 0
+                class_name = self.class_names.get(cls_id, str(cls_id)).lower()
+                detected_classes.append(class_name)
+                conf_raw = float(box.conf.cpu().numpy()[0]) if hasattr(box, "conf") else float(box.conf[0])
+                xyxy = box.xyxy.cpu().numpy()[0].tolist() if hasattr(box, "xyxy") else box.xyxy[0].tolist()
+                conf_adj = self._size_boost_confidence(xyxy, conf_raw, orig_shape)
+                if conf_adj < conf:
+                    continue
+                x1, y1, x2, y2 = map(int, xyxy)
+                
+                # Check if item is explicitly safe
+                is_safe = any(k in class_name for k in self.safe_keywords)
+                
+                # Check if item is waste/trash
+                is_waste = any(k in class_name for k in self.waste_keywords)
+                
+                # Check for critical hazards
+                is_critical_hazard = any(k in class_name for k in ['fire', 'smoke', 'flame', 'gas'])
+                
+                # Check for high hazards
+                is_high_hazard = any(k in class_name for k in [
+                    'chemical', 'oil', 'battery', 'broken', 'sharp', 'glass',
+                    'needle', 'syringe', 'biohazard', 'electrical', 'wire'
+                ])
+                
+                # Classify the detection
+                if is_safe:
+                    sev = 'safe'
+                    health_status = "Safe"
+                elif is_critical_hazard:
+                    sev = 'critical'
+                    health_status = "Hazardous"
+                    severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                elif is_high_hazard:
+                    sev = 'high'
+                    health_status = "Hazardous"
+                    severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                elif is_waste:
+                    sev = 'medium'
+                    health_status = "Hazardous"
+                    severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                else:
+                    # Default to safe for unrecognized common objects
+                    sev = 'safe'
+                    health_status = "Safe"
+                color = (0, 255, 0) if health_status == "Safe" else ((0, 0, 255) if sev in ['critical', 'high'] else (0, 165, 255))
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                label = f"{class_name} {conf_adj:.2f}"
+                cv2.putText(annotated, label, (x1, max(y1 - 6, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                area = (x2 - x1) * (y2 - y1)
+                mask_poly = None
+                if masks is not None and hasattr(masks, "data") and len(masks.data) > i:
+                    try:
+                        mask = masks.data[i].cpu().numpy()
+                        mask_poly = mask
+                    except Exception:
+                        mask_poly = None
+                detections.append({
+                    "class": class_name,
+                    "confidence": round(conf_adj, 4),
+                    "bbox_xyxy": [float(x1), float(y1), float(x2), float(y2)],
+                    "bbox_area": float(area),
+                    "health_status": health_status,
+                    "severity": sev,
+                    "mask_present": mask_poly is not None
+                })
+        total_detections = len(detections)
+        hazardous_count = sum(1 for d in detections if d["health_status"] == "Hazardous")
+        safe_count = total_detections - hazardous_count
+        avg_confidence = round((sum(d["confidence"] for d in detections) / total_detections) if total_detections else 0.0, 4)
+        high_conf = sum(1 for d in detections if d["confidence"] >= 0.70)
+        med_conf = sum(1 for d in detections if 0.50 <= d["confidence"] < 0.70)
+        low_conf = sum(1 for d in detections if d["confidence"] < 0.50)
+        weighted_score = (high_conf * 1.0) + (med_conf * 0.85) + (low_conf * 0.60) if total_detections else 0.0
+        model_accuracy = round((weighted_score / total_detections) * 100, 2) if total_detections else 0.0
+        overall_risk = "safe"
+        if severity_counts.get('critical', 0) > 0:
+            overall_risk = "critical"
+        elif severity_counts.get('high', 0) > 0:
+            overall_risk = "high"
+        elif severity_counts.get('medium', 0) > 0:
+            overall_risk = "medium"
+        else:
+            overall_risk = "safe"
+        _, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        img_base64 = base64.b64encode(buf).decode("utf-8")
+        elapsed = time.time() - start_total
+        fps = round((1.0 / elapsed) if elapsed > 0 else 0.0, 2)
         return {
-            "model_loaded": self.model is not None,
-            "num_classes": len(self.class_names),
-            "class_names": list(self.class_names.values()),
-            "inference_settings": {
+            "total_detections": total_detections,
+            "hazardous_count": hazardous_count,
+            "safe_count": safe_count,
+            "overall_assessment": "Safe" if hazardous_count == 0 else "Hazardous",
+            "overall_risk_level": overall_risk,
+            "severity_breakdown": severity_counts,
+            "average_confidence": avg_confidence,
+            "model_accuracy": model_accuracy,
+            "high_confidence_detections": high_conf,
+            "medium_confidence_detections": med_conf,
+            "detections": detections,
+            "annotated_image": img_base64,
+            "performance": {
+                "device": self.device,
+                "use_half": self.use_half,
+                "imgsz": self.imgsz,
+                "inference_time_s": round(infer_time, 4),
+                "total_elapsed_s": round(elapsed, 4),
+                "fps": fps,
+                "warmup_time_s": round(getattr(self, "warmup_time", 0.0), 4),
+                "preprocess_time_s": round(preprocess_time, 4)
+            },
+            "model_settings": {
+                "model_path": str(getattr(self.model, "ckpt_path", "unknown")),
                 "confidence_threshold": self.conf_threshold,
                 "iou_threshold": self.iou_threshold,
-                "image_size": self.imgsz,
-                "max_detections": self.max_det
-            },
-            "hazard_categories": len(self.hazard_severity)
+                "max_det": self.max_det,
+                "tta_enabled": self.enable_tta
+            }
+        }
+
+    def update_weights(self, new_model_path: str):
+        with self.lock:
+            if not os.path.exists(new_model_path):
+                raise FileNotFoundError(f"Model not found: {new_model_path}")
+            logger.info(f"Updating model to {new_model_path}")
+            self.model = YOLO(new_model_path)
+            if self.device == "cuda":
+                try:
+                    self.model.to("cuda")
+                except Exception:
+                    pass
+            if self.use_half and hasattr(self.model, "model") and hasattr(self.model.model, "half"):
+                try:
+                    self.model.model.half()  # type: ignore
+                except Exception:
+                    pass
+            if hasattr(self.model, "names"):
+                self.class_names = {int(k): v for k, v in self.model.names.items()} if isinstance(self.model.names, dict) else {i: n for i, n in enumerate(self.model.names)}
+            self.warmup_done = False
+            self._warmup()
+            logger.info("Model updated and warmed up")
+
+    def update_inference_settings(self, conf: Optional[float] = None, iou: Optional[float] = None, imgsz: Optional[int] = None, tta: Optional[bool] = None):
+        if conf is not None:
+            self.conf_threshold = float(min(max(conf, 0.0), 1.0))
+        if iou is not None:
+            self.iou_threshold = float(min(max(iou, 0.0), 1.0))
+        if imgsz is not None:
+            self.imgsz = int(imgsz)
+            self.warmup_done = False
+        if tta is not None:
+            self.enable_tta = bool(tta)
+
+    def get_class_names(self) -> Dict[int, str]:
+        return self.class_names
+
+    def get_model_info(self) -> Dict:
+        return {
+            "loaded": self.model is not None,
+            "num_classes": len(self.class_names),
+            "device": self.device,
+            "use_half": self.use_half,
+            "imgsz": self.imgsz,
+            "conf_threshold": self.conf_threshold,
+            "iou_threshold": self.iou_threshold,
+            "max_det": self.max_det,
+            "warmup_done": self.warmup_done
         }
